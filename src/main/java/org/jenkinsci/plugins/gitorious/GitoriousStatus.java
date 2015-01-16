@@ -22,6 +22,8 @@ import javax.inject.Inject;
 import javax.servlet.ServletException;
 import java.io.IOException;
 import java.io.PrintWriter;
+import java.net.MalformedURLException;
+import java.net.URL;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -59,36 +61,36 @@ public class GitoriousStatus implements UnprotectedRootAction {
     }
 
     /*
-        Sample Payload
+     Sample Payload
 
-        {
-            "after": "ea1bb8447464a2fbc6dfa48867eb0f462ac3aad1",
-            "before": "4c6331eac279eccd9401491fb8df7c61358590c0",
-            "commits": [
-                {
-                    "author": { "email": "smoyer@example.com", "name": "Scott Moyer" },
-                    "committed_at": "2012-09-28T03:15:00+00:00",
-                    "id": "ea1bb8447464a2fbc6dfa48867eb0f462ac3aad1",
-                    "message": "webhook",
-                    "timestamp": "2012-09-28T03:15:00+00:00",
-                    "url": "https://gitorious.example.com/provisioning/mp-chef/commit/ea1bb8447464a2fbc6dfa48867eb0f462ac3aad1"
-                }
-            ],
-            "project": {
-                "description": "Puppet/Chef, rundeck, and anything else associated with provisioning",
-                "name": "provisioning"
-            },
-            "pushed_at": "2012-09-27T23:15:05-04:00",
-            "pushed_by": "smoyer",
-            "ref": "master",
-            "repository": {
-                "clones": 1,
-                "description": "All things Chef",
-                "name": "mp-chef",
-                "owner": { "name": "smoyer" },
-                "url": "https://gitorious.example.com/provisioning/mp-chef"
-            }
-        }
+     {
+     "after": "ea1bb8447464a2fbc6dfa48867eb0f462ac3aad1",
+     "before": "4c6331eac279eccd9401491fb8df7c61358590c0",
+     "commits": [
+     {
+     "author": { "email": "smoyer@example.com", "name": "Scott Moyer" },
+     "committed_at": "2012-09-28T03:15:00+00:00",
+     "id": "ea1bb8447464a2fbc6dfa48867eb0f462ac3aad1",
+     "message": "webhook",
+     "timestamp": "2012-09-28T03:15:00+00:00",
+     "url": "https://gitorious.example.com/provisioning/mp-chef/commit/ea1bb8447464a2fbc6dfa48867eb0f462ac3aad1"
+     }
+     ],
+     "project": {
+     "description": "Puppet/Chef, rundeck, and anything else associated with provisioning",
+     "name": "provisioning"
+     },
+     "pushed_at": "2012-09-27T23:15:05-04:00",
+     "pushed_by": "smoyer",
+     "ref": "master",
+     "repository": {
+     "clones": 1,
+     "description": "All things Chef",
+     "name": "mp-chef",
+     "owner": { "name": "smoyer" },
+     "url": "https://gitorious.example.com/provisioning/mp-chef"
+     }
+     }
      */
     public HttpResponse doNotifyCommit(@QueryParameter String payload) throws ServletException, IOException {
         LOGGER.finer(String.format("Payload:\r\n%s", payload));
@@ -103,10 +105,10 @@ public class GitoriousStatus implements UnprotectedRootAction {
         // but the payload URL doesn't come that way. So I added a check in case someone is using HTTP access in jenkins.
         String url2 = baseUrl.replace("://", "://git.");
         LOGGER.log(Level.FINE, "Testing {0}", url2);
-        final HttpResponse gitUrlResponse = gitStatus.doNotifyCommit(url2 + ".git", null);
+        final HttpResponse gitUrlResponse = gitStatus.doNotifyCommit(url2 + ".git", null, null);
         String url = baseUrl;
         LOGGER.log(Level.FINE, "Testing {0}", url);
-        final HttpResponse baseUrlResponse = gitStatus.doNotifyCommit(url + ".git", null);
+        final HttpResponse baseUrlResponse = gitStatus.doNotifyCommit(url + ".git", null, null);
 
         String browserFormatedUrl = baseUrl;
         //Jenkins repository browser appends the trailing '/' to the url.
@@ -134,9 +136,17 @@ public class GitoriousStatus implements UnprotectedRootAction {
                     GitRepositoryBrowser browser = g.getBrowser();
                     if (browser != null && browser instanceof GitoriousWeb) {
                         GitoriousWeb gitoriousBrowser = (GitoriousWeb) browser;
-                        String gitoriousBrowserUrl = gitoriousBrowser.getUrl().toString();
-                        LOGGER.log(Level.FINER, "Gitorious Browser URL: {0}", gitoriousBrowserUrl);
-                        if (gitoriousBrowserUrl.equals(browserFormatedUrl)) {
+                        URL gitoriousBrowserUrl;
+                        try {
+                            gitoriousBrowserUrl = gitoriousBrowser.getUrl();
+                        } catch (MalformedURLException ex) {
+                            LOGGER.log(Level.SEVERE, ex.getMessage(), ex);
+                            continue;
+                        }
+                        LOGGER.log(Level.FINER, "Gitorious Browser URL:  {0}", gitoriousBrowserUrl);
+                        String gitoriousBrowserUrlString = gitoriousBrowserUrl.toString();
+                        LOGGER.log(Level.FINER, "Gitorious Browser URL String: {0}", gitoriousBrowserUrlString);
+                        if (gitoriousBrowserUrlString.equals(browserFormatedUrl)) {
                             LOGGER.log(Level.FINEST, "URL's match. Attempting to trigger...");
                             //This browser is attached to a project
                             //The following only works if polling is enabled.
@@ -155,13 +165,15 @@ public class GitoriousStatus implements UnprotectedRootAction {
             }
             return new HttpResponse() {
                 public void generateResponse(StaplerRequest req, StaplerResponse rsp, Object node) throws IOException, ServletException {
+                    PrintWriter w = rsp.getWriter();
                     gitUrlResponse.generateResponse(req, rsp, node);
+                    w.println();
                     baseUrlResponse.generateResponse(req, rsp, node);
-
+                    w.println();
+                    
                     rsp.setStatus(SC_OK);
                     rsp.setContentType("text/plain");
 
-                    PrintWriter w = rsp.getWriter();
                     for (AbstractProject<?, ?> p : triggeredProjects) {
                         rsp.addHeader(TRIGGERED_HEADER, p.getFullDisplayName());
                     }
@@ -169,7 +181,7 @@ public class GitoriousStatus implements UnprotectedRootAction {
                         w.println(String.format("Scheduled polling of %s\r\n", p.getFullDisplayName()));
                     }
                     for (AbstractProject<?, ?> p : nonPollingProjects) {
-                        w.println(String.format("Found \"%s\" but it is not configured for polling.", p.getFullDisplayName()));
+                        w.println(String.format("Found \"%s\" but it is not configured for polling.\r\n", p.getFullDisplayName()));
                     }
                 }
 
